@@ -1,0 +1,12 @@
+[borg_srv]
+srv ansible_host=10.100.11.114
+[borg_srv:vars]
+ansible_user=root
+ansible_ssh_pass=password
+
+[borg_client]
+client ansible_host=10.100.11.115
+[borg_client:vars]
+ansible_user=root
+ansible_ssh_pass=password
+

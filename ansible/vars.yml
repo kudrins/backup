@@ -1,0 +1,8 @@
+---
+vcenter_hostname: 10.100.10.1
+vcenter_username: administrator@vsphere.local
+vcenter_password: password
+
+servers:
+  - { template: t_centos8, name: borg_srv, memory_mb: 2048, ip: 10.100.11.114, hostname: borg-srv }
+  - { template: t_centos8, name: borg_client, memory_mb: 2048, ip: 10.100.11.115, hostname: borg-client }

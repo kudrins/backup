@@ -1,0 +1,189 @@
+---
+- name: Deploy VMs 
+  hosts: localhost
+  vars_files: vars.yml
+  become: false
+  gather_facts: false
+  collections:
+    - community.vmware
+  tasks:
+  - name: deploy VMs
+    local_action:
+      module: vmware_guest
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      validate_certs: False
+      datacenter: Datacenter
+      datastore: datastore_6TB
+      folder: centos
+      template: "{{item.template}}"
+      name: "{{item.name}}"
+      hardware:
+        nested_virt: true
+        memory_mb: "{{item.memory_mb}}"
+      networks:
+        - name: VMs11
+          ip: "{{item.ip}}"
+          netmask: "255.255.255.0"
+          gateway: "10.100.11.254"
+      customization:
+        hostname: "{{item.hostname}}"
+        dns_servers: [8.8.8.8]
+    with_items: "{{servers}}"
+    register: deploy
+    delegate_to: localhost
+  tags:
+  - install
+
+- name: Create a new disk on backup-srv
+  hosts: localhost
+  vars_files: vars.yml
+  become: false
+  gather_facts: false
+  tasks:
+  - name: Look up the VM called borg_srv in the inventory
+    register: search_result 
+    vmware.vmware_rest.vcenter_vm_info:
+      vcenter_validate_certs: False
+      vcenter_hostname: "{{ vcenter_hostname }}"
+      vcenter_username: "{{ vcenter_username }}"
+      vcenter_password: "{{ vcenter_password }}"
+      filter_names:
+      - borg_srv
+
+  - name: Collect information about a specific VM
+    vmware.vmware_rest.vcenter_vm_info:
+      vcenter_validate_certs: False
+      vcenter_hostname: "{{ vcenter_hostname }}"
+      vcenter_username: "{{ vcenter_username }}"
+      vcenter_password: "{{ vcenter_password }}"
+      vm: '{{ search_result.value[0].vm }}'
+    register: search_result_info
+
+  - name: Create a new disk
+    vmware.vmware_rest.vcenter_vm_hardware_disk:
+      vcenter_validate_certs: False
+      vcenter_hostname: "{{ vcenter_hostname }}"
+      vcenter_username: "{{ vcenter_username }}"
+      vcenter_password: "{{ vcenter_password }}"
+      vm: '{{ search_result_info.id }}'
+      type: SATA
+      new_vmdk:
+        capacity: 2147483648
+    register: my_new_disk
+  tags:
+  - hdd
+
+- name: Start VMs 
+  hosts: localhost
+  vars_files: vars.yml
+  become: false
+  gather_facts: false
+  collections:
+    - community.vmware
+  tasks:
+  - name: start VMs
+    local_action:
+      module: vmware_guest
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      validate_certs: False
+      name: "{{item.name}}"
+      state: powered-on
+      wait_for_ip_address: true
+    with_items: "{{servers}}"
+  tags:
+  - start
+  
+- name: Create a new ext4 primary partition on borg-srv
+  hosts: borg_srv
+  become: true 
+  gather_facts: false
+  tasks:
+  - name: Create a new ext4 primary partition
+    community.general.parted:
+      device: /dev/sdb
+      number: 1
+      state: present
+      fs_type: ext4
+  tags:
+  - sdb
+
+- name: configure borg-srv
+  hosts: borg_srv
+  become: true 
+  gather_facts: false
+  tasks:
+  - name: Add the user
+    ansible.builtin.user:
+      name: borg
+      shell: /bin/bash
+      home: /home/borg
+  - name: install srv
+    shell: "{{item}}"
+    with_items:
+      - wget https://github.com/borgbackup/borg/releases/download/1.2.8/borg-linux64 -O /usr/local/bin/borg
+      - chmod +x /usr/local/bin/borg
+      - mkdir /var/backup
+      - chown borg:borg /var/backup/
+      - mkfs -t ext4 /dev/sdb1
+      - mount /dev/sdb1 /var/backup
+      - rmdir /var/backup/lost+found
+      - echo "/dev/sdb1   /var/backup   ext4  defaults   0 0" >> /etc/fstab
+      - mkdir /home/borg/.ssh
+      - touch /home/borg/.ssh/authorized_keys
+      - chmod 0700 /home/borg/.ssh
+      - chmod 0600 /home/borg/.sshauthorized_keys
+      - chown borg:borg -R /home/borg/.ssh
+  tags:
+  - srv
+
+- name: configure borg-client
+  hosts: borg_client
+  become: true 
+  gather_facts: false
+  tasks:
+  - name: install client
+    shell: "{{item}}"
+    with_items:
+      - wget https://github.com/borgbackup/borg/releases/download/1.2.8/borg-linux64 -O /usr/local/bin/borg
+      - chmod +x /usr/local/bin/borg
+
+  - name: copy script
+    copy:
+      src: borg-backup.sh
+      dest: /root/
+  - name: chmod
+    shell: chmod +x /root/borg-backup.sh
+
+  - name: copy logrotate
+    copy:
+      src: borg
+      dest: /etc/logrotate.d/
+
+  - name: keygen
+    shell: echo | ssh-keygen -P ''
+
+  - name: coppy id_rsa.pub to ansible host
+    ansible.builtin.fetch:
+      src: /root/.ssh/id_rsa.pub
+      dest: /home/sergey/otus/backup/
+      flat: yes
+  tags:
+  - client
+
+- name: set authorized_keys on borg-srv
+  hosts: borg_srv
+  become: true 
+  gather_facts: false
+  tasks:
+  - name: copy id_rsa.pub to borg-srv
+    copy:
+      src: id_rsa.pub
+      dest: /home/borg/
+  - name: set authorized_keys
+    shell: cat /home/borg/id_rsa.pub >> /home/borg/.ssh/authorized_keys
+  tags:
+  - pubkey

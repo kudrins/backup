@@ -1,0 +1,11 @@
+---
+- name: crontab on borg-client
+  hosts: borg_client
+  become: true 
+  gather_facts: false
+  tasks:
+  - name: set a job in crontab 
+    ansible.builtin.cron:
+      name: "run script"
+      minute: "*/5"
+      job: "/root/borg-backup.sh"

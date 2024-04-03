@@ -1,0 +1,5 @@
+/var/log/borg/borg.log {
+    weekly
+    missingok
+    rotate 4
+}
